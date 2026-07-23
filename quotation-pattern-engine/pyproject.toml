@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quotation-pattern-engine"
+version = "0.1.0"
+description = "Deterministic historical quotation pattern analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+quotation-patterns = "quotation_pattern_engine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

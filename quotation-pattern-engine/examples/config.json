@@ -1,0 +1,30 @@
+{
+  "columns": {
+    "date": "quotation_date",
+    "product": "product",
+    "price": "price_eur_m3",
+    "supplier": "supplier",
+    "valid_from": "valid_from",
+    "valid_to": "valid_to",
+    "event_type": "event_type",
+    "source": "source_email",
+    "priority": "priority"
+  },
+  "date_formats": [
+    "%Y-%m-%d",
+    "%d/%m/%Y"
+  ],
+  "movement_epsilon": 0.5,
+  "moving_average_window": 3,
+  "volatility_window": 3,
+  "regime_lookback": 2,
+  "regime_threshold": 5.0,
+  "minimum_streak_length": 2,
+  "minimum_stable_length": 2,
+  "stability_threshold": 0.5,
+  "absolute_spike_floor": 15.0,
+  "spike_std_multiplier": 1.0,
+  "price_to_display_unit_divisor": 10.0,
+  "volatility_low_max": 10.0,
+  "volatility_medium_max": 25.0
+}
