@@ -61,9 +61,13 @@ def deterministic_interpretation(
     events: list[PatternEvent],
 ) -> str:
     lines = ["# Historical Quotation Pattern Interpretation", ""]
+    currency = "€"
+    unit = "m³"
 
     for summary in summaries:
         net_change = summary["net_change"]
+        start_price = summary["start_price"]
+        end_price = summary["end_price"]
         if net_change > 0:
             direction = "increased"
         elif net_change < 0:
@@ -71,14 +75,26 @@ def deterministic_interpretation(
         else:
             direction = "did not change"
 
+        percentage_change = (
+        (net_change / start_price) * 100
+        if start_price
+        else 0.0
+    )
+
         lines.extend([
             f"## {summary['supplier']} — {summary['product']}",
             "",
             (
-                f"Across {summary['observations']} canonical quotations from "
+                   f"Across {summary['observations']} canonical quotations from "
                 f"{summary['period_start'].isoformat()} to "
-                f"{summary['period_end'].isoformat()}, the price {direction} "
-                f"by {abs(net_change):.4f}. The observed volatility level was "
+                f"{summary['period_end'].isoformat()}, the quoted price "
+                f"{direction} from "
+                f"{currency}{start_price:,.2f}/{unit} to "
+                f"{currency}{end_price:,.2f}/{unit}. "
+                f"This represents a net change of "
+                f"{net_change:+,.2f} {currency}/{unit} "
+                f"({percentage_change:+.2f}%). "
+                f"The observed volatility level was "
                 f"{summary['volatility_level'].lower()}, with "
                 f"{summary['reversals']} direction reversals."
             ),
