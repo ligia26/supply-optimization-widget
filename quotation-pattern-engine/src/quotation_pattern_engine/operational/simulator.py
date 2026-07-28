@@ -1,54 +1,323 @@
 from __future__ import annotations
+
 from collections import defaultdict
-from datetime import date,timedelta
+from dataclasses import replace
+from datetime import date, timedelta
+
 from .config import OperationalConfig
 from .models import *
-from .optimizer import demand_between,evaluate_candidates
+from .optimizer import demand_between, evaluate_candidates
 from .signal_model import build_signal
 
-def simulate_strategy(strategy:str,tanks:list[TankState],demand_profiles:list[DemandProfile],quotations:list[QuotationPoint],events:list[PatternEvent],summaries:list[PatternSummary],config:OperationalConfig):
-    if strategy not in {"AS_IS","WIDGET"}: raise ValueError(strategy)
-    lookup={(x.distributor_id,x.product,x.weekday):x.forecast_daily_litres for x in demand_profiles}
-    byp=defaultdict(list)
-    for q in quotations:byp[q.product].append(q)
-    for v in byp.values():v.sort(key=lambda x:x.date)
-    start=date.fromisoformat(config.simulation_start) if config.simulation_start else min(x.date for x in quotations)
-    end=date.fromisoformat(config.simulation_end) if config.simulation_end else max(x.date for x in quotations)
-    inv={(t.distributor_id,t.product):t.opening_inventory_litres for t in tanks}; led=[]; dec=[]
-    qlookup={(q.product,q.date):q for q in quotations}
-    for day_i in range((end-start).days+1):
-        day=start+timedelta(days=day_i)
-        for t in sorted(tanks,key=lambda x:(x.distributor_id,x.product)):
-            key=(t.distributor_id,t.product); opening=inv[key]; today=lookup.get((t.distributor_id,t.product,day.weekday()),0.0)
-            point=qlookup.get((t.product,day)); purchase=0.0; decision=None
+
+def _mark_candidate_trace(
+    candidates: list[CandidateEvaluation],
+    chosen: CandidateEvaluation,
+    required: CandidateEvaluation,
+) -> tuple[CandidateEvaluation, ...]:
+    trace = []
+
+    for candidate in candidates:
+        selected = candidate is chosen
+
+        if selected and chosen is required:
+            reason = "Selected because it is the operational minimum."
+        elif selected:
+            reason = "Selected because it has the lowest robust objective."
+        elif candidate is required:
+            reason = "Operational-minimum benchmark; feasible but not selected."
+        else:
+            reason = "Feasible candidate rejected because its robust objective is higher."
+
+        trace.append(
+            replace(
+                candidate,
+                selected=selected,
+                selection_reason=reason,
+            )
+        )
+
+    return tuple(trace)
+
+
+def simulate_strategy(
+    strategy: str,
+    tanks: list[TankState],
+    demand_profiles: list[DemandProfile],
+    quotations: list[QuotationPoint],
+    events: list[PatternEvent],
+    summaries: list[PatternSummary],
+    config: OperationalConfig,
+):
+    if strategy not in {"AS_IS", "WIDGET"}:
+        raise ValueError(strategy)
+
+    lookup = {
+        (x.distributor_id, x.product, x.weekday): x.forecast_daily_litres
+        for x in demand_profiles
+    }
+
+    byp = defaultdict(list)
+    for q in quotations:
+        byp[q.product].append(q)
+    for values in byp.values():
+        values.sort(key=lambda x: x.date)
+
+    start = (
+        date.fromisoformat(config.simulation_start)
+        if config.simulation_start
+        else min(x.date for x in quotations)
+    )
+    end = (
+        date.fromisoformat(config.simulation_end)
+        if config.simulation_end
+        else max(x.date for x in quotations)
+    )
+
+    inv = {
+        (t.distributor_id, t.product): t.opening_inventory_litres
+        for t in tanks
+    }
+
+    ledger: list[DailyLedgerRow] = []
+    decisions: list[PurchaseDecision] = []
+    qlookup = {(q.product, q.date): q for q in quotations}
+
+    for day_i in range((end - start).days + 1):
+        day = start + timedelta(days=day_i)
+
+        for tank in sorted(
+            tanks,
+            key=lambda x: (x.distributor_id, x.product),
+        ):
+            key = (tank.distributor_id, tank.product)
+            opening = inv[key]
+            today = lookup.get(
+                (tank.distributor_id, tank.product, day.weekday()),
+                0.0,
+            )
+
+            point = qlookup.get((tank.product, day))
+            purchase = 0.0
+            decision = None
+
             if point is not None:
-                qdates=[x.date for x in byp[t.product]]; nextq=next((d for d in qdates if d>day),end+timedelta(days=1))
-                hist=[x for x in byp[t.product] if x.date<=day]
-                sig=build_signal(hist,events,day,config)
-                # Retrospective feasibility floor: enough stock to survive until the next observed quotation.
-                required_end=min(nextq,end+timedelta(days=1))
-                req_target=demand_between(lookup,t.distributor_id,t.product,day,required_end)
-                req_buy=max(0.0,min(req_target,t.capacity_litres*config.max_fill_ratio)-opening)
-                candidates=[]; required=None; chosen=None
-                if day==end:
-                    purchase=max(0.0,min(t.capacity_litres*config.max_fill_ratio,t.opening_inventory_litres+today)-opening)
-                    selected=0.0; reason="Final quotation-date stock equalisation"; downside=0.0
-                elif strategy=="AS_IS":
-                    purchase=req_buy; selected=float((required_end-day).days); reason="Reference policy: cover until next observed quotation"; downside=0.0
+                quotation_dates = [x.date for x in byp[tank.product]]
+                next_quotation = next(
+                    (d for d in quotation_dates if d > day),
+                    end + timedelta(days=1),
+                )
+
+                history = [
+                    x for x in byp[tank.product]
+                    if x.date <= day
+                ]
+                signal = build_signal(
+                    history,
+                    events,
+                    day,
+                    config,
+                )
+
+                required_end = min(
+                    next_quotation,
+                    end + timedelta(days=1),
+                )
+                required_target = demand_between(
+                    lookup,
+                    tank.distributor_id,
+                    tank.product,
+                    day,
+                    required_end,
+                )
+                required_buy = max(
+                    0.0,
+                    min(
+                        required_target,
+                        tank.capacity_litres * config.max_fill_ratio,
+                    )
+                    - opening,
+                )
+
+                candidates: list[CandidateEvaluation] = []
+                candidate_trace: tuple[CandidateEvaluation, ...] = ()
+                required = None
+                chosen = None
+
+                if day == end:
+                    purchase = max(
+                        0.0,
+                        min(
+                            tank.capacity_litres * config.max_fill_ratio,
+                            tank.opening_inventory_litres + today,
+                        )
+                        - opening,
+                    )
+                    selected_cover_days = 0.0
+                    reason = "Final quotation-date stock equalisation"
+                    downside = 0.0
+
+                elif strategy == "AS_IS":
+                    purchase = required_buy
+                    selected_cover_days = float(
+                        (required_end - day).days
+                    )
+                    reason = (
+                        "Operational minimum required to cover demand "
+                        "until the next observed quotation"
+                    )
+                    downside = 0.0
+
                 else:
-                    candidates=evaluate_candidates(day=day,end=end,tank=t,inventory=opening,current_price=point.price_per_litre,required_buy=req_buy,demand_lookup=lookup,signal=sig,history=hist,config=config)
-                    required=min(candidates,key=lambda c:(abs(c.purchase_litres-req_buy),c.expected_total_cost_eur))
-                    chosen=min(candidates,key=lambda c:(c.expected_total_cost_eur,c.purchase_litres))
-                    # Bearish evidence may justify waiting, but never below the operational feasibility floor.
-                    if sig.score<=0 and chosen.purchase_litres>required.purchase_litres:
-                        chosen=required
-                    purchase=max(req_buy,chosen.purchase_litres); selected=chosen.target_cover_days; reason="Lowest robust expected-cost volume" if chosen is not required else "Operational minimum selected"; downside=chosen.downside_cost_eur
-                purchase=min(purchase,max(0.0,t.capacity_litres*config.max_fill_ratio-opening))
-                chosen_cost=(chosen.expected_total_cost_eur if strategy=="WIDGET" and day!=end else purchase*point.price_per_litre)
-                required_cost=(required.expected_total_cost_eur if strategy=="WIDGET" and day!=end else purchase*point.price_per_litre)
-                decision=PurchaseDecision(day,strategy,t.distributor_id,t.product,point.price_per_litre,opening,purchase,purchase*point.price_per_litre+(config.order_cost_eur if purchase>0 else 0),selected,req_buy,max(0,purchase-req_buy),sig.score,sig.confidence,sig.expected_change_per_litre_day,sig.price_percentile,len(candidates),chosen_cost,required_cost,required_cost-chosen_cost,downside," | ".join(sig.patterns)," | ".join(sig.caveats),reason)
-                dec.append(decision)
-            sold=min(today,opening+purchase); lost=max(0,today-sold); closing=opening+purchase-sold; inv[key]=closing
-            regime=point.regime if point else "No new quotation"
-            led.append(DailyLedgerRow(day,strategy,t.distributor_id,t.product,opening,purchase,decision.purchase_spend_eur if decision else 0.0,sold,lost,closing,regime))
-    return led,dec
+                    candidates = evaluate_candidates(
+                        day=day,
+                        end=end,
+                        tank=tank,
+                        inventory=opening,
+                        current_price=point.price_per_litre,
+                        required_buy=required_buy,
+                        demand_lookup=lookup,
+                        signal=signal,
+                        history=history,
+                        config=config,
+                    )
+
+                    required = min(
+                        candidates,
+                        key=lambda candidate: (
+                            abs(
+                                candidate.purchase_litres
+                                - required_buy
+                            ),
+                            candidate.robust_objective_eur,
+                        ),
+                    )
+                    chosen = min(
+                        candidates,
+                        key=lambda candidate: (
+                            candidate.robust_objective_eur,
+                            candidate.purchase_litres,
+                        ),
+                    )
+
+                    # Bearish evidence may justify waiting, but never below
+                    # the operational feasibility floor.
+                    if (
+                        signal.score <= 0
+                        and chosen.purchase_litres
+                        > required.purchase_litres
+                    ):
+                        chosen = required
+
+                    purchase = max(
+                        required_buy,
+                        chosen.purchase_litres,
+                    )
+                    selected_cover_days = chosen.target_cover_days
+                    reason = (
+                        "Operational minimum selected"
+                        if chosen is required
+                        else "Lowest robust expected-cost volume"
+                    )
+                    downside = chosen.downside_cost_eur
+                    candidate_trace = _mark_candidate_trace(
+                        candidates,
+                        chosen,
+                        required,
+                    )
+
+                purchase = min(
+                    purchase,
+                    max(
+                        0.0,
+                        tank.capacity_litres
+                        * config.max_fill_ratio
+                        - opening,
+                    ),
+                )
+
+                if strategy == "WIDGET" and day != end:
+                    chosen_cost = chosen.robust_objective_eur
+                    required_cost = required.robust_objective_eur
+                else:
+                    chosen_cost = (
+                        purchase * point.price_per_litre
+                    )
+                    required_cost = chosen_cost
+
+                decision = PurchaseDecision(
+                    date=day,
+                    strategy=strategy,
+                    distributor_id=tank.distributor_id,
+                    product=tank.product,
+                    quotation_eur_per_litre=point.price_per_litre,
+                    inventory_before_litres=opening,
+                    purchase_litres=purchase,
+                    purchase_spend_eur=(
+                        purchase * point.price_per_litre
+                        + (
+                            config.order_cost_eur
+                            if purchase > 0
+                            else 0.0
+                        )
+                    ),
+                    selected_cover_days=selected_cover_days,
+                    operational_required_litres=required_buy,
+                    discretionary_litres=max(
+                        0.0,
+                        purchase - required_buy,
+                    ),
+                    signal_score=signal.score,
+                    signal_confidence=signal.confidence,
+                    expected_change_eur_per_litre_day=(
+                        signal.expected_change_per_litre_day
+                    ),
+                    observed_price_percentile=(
+                        signal.price_percentile
+                    ),
+                    candidates_evaluated=len(candidates),
+                    selected_expected_cost_eur=chosen_cost,
+                    required_only_expected_cost_eur=required_cost,
+                    expected_advantage_eur=(
+                        required_cost - chosen_cost
+                    ),
+                    downside_cost_eur=downside,
+                    patterns_used=" | ".join(signal.patterns),
+                    caveats=" | ".join(signal.caveats),
+                    reason=reason,
+                    candidate_trace=candidate_trace,
+                )
+                decisions.append(decision)
+
+            sold = min(today, opening + purchase)
+            lost = max(0.0, today - sold)
+            closing = opening + purchase - sold
+            inv[key] = closing
+
+            regime = (
+                point.regime
+                if point
+                else "No new quotation"
+            )
+
+            ledger.append(
+                DailyLedgerRow(
+                    date=day,
+                    strategy=strategy,
+                    distributor_id=tank.distributor_id,
+                    product=tank.product,
+                    opening_inventory_litres=opening,
+                    purchase_litres=purchase,
+                    purchase_total_eur=(
+                        decision.purchase_spend_eur
+                        if decision
+                        else 0.0
+                    ),
+                    sales_litres=sold,
+                    lost_sales_litres=lost,
+                    closing_inventory_litres=closing,
+                    regime=regime,
+                )
+            )
+
+    return ledger, decisions
