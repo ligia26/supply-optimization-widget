@@ -1,0 +1,75 @@
+{
+  "engine": "causal common-horizon candidate optimiser",
+  "pattern_inputs": [
+    "P01",
+    "P02",
+    "P03",
+    "P04",
+    "P05",
+    "P06",
+    "P07"
+  ],
+  "pattern_summary_usage": "Loaded for audit but excluded from causal decisions because whole-period summaries would leak future data",
+  "same_total_litres": true,
+  "same_closing_inventory": true,
+  "terminal_inventory_credit": false,
+  "decision_trace": "Every feasible WIDGET candidate is exported with its purchase cost, expected future cost, holding cost, working-capital cost, order cost, downside cost, robust objective, selection status and rejection reason.",
+  "decision_report": "Decision-oriented audit with operational state, market evidence, complete candidate rankings, selected volume, next-best alternative, approximate later baseline purchases brought forward and decision-level economics.",
+  "fact_boundary": "Costs use supplied configuration values. Zero values mean the configured input is zero; they should not be interpreted as proof that the real client cost is zero.",
+  "validation_warning": "Historical simulation against a modelled reference policy; requires actual order history and unseen periods for validation.",
+  "config": {
+    "quotation_price_divisor": 1000.0,
+    "simulation_start": "2026-06-16",
+    "simulation_end": "2026-07-08",
+    "ignored_products": [
+      "Performance"
+    ],
+    "safety_days": 1,
+    "planning_horizon_days": 14,
+    "max_fill_ratio": 1.0,
+    "minimum_order_litres": 0.0,
+    "order_cost_eur": 0.0,
+    "holding_cost_eur_per_litre_day": 0.0,
+    "working_capital_cost_rate_daily": 0.0,
+    "risk_aversion": 0.0,
+    "max_pattern_age_days": 7,
+    "missing_pattern_confidence": 0.5,
+    "confidence_labels": {
+      "very high": 0.95,
+      "high": 0.85,
+      "medium": 0.65,
+      "low": 0.45,
+      "very low": 0.25
+    },
+    "pattern_weights": {
+      "P01": 1.0,
+      "P02": 1.0,
+      "P03": 0.6,
+      "P04": 0.4,
+      "P05": 0.8,
+      "P06": 1.2,
+      "P07": 0.9
+    },
+    "product_mapping": {
+      "Verde": "Benzina Synergy",
+      "Diesel": "Gasolio Synergy"
+    },
+    "distributor_mapping": {
+      "MG 368318": "368318",
+      "MG340 368319": "368319",
+      "Scoglio del Tonno 368320": "368320",
+      "Virgilio 368321": "368321",
+      "Dante 368322": "368322"
+    },
+    "monthly_name_mapping": {
+      "taras": "368318",
+      "lorenzo": "368319",
+      "scoglio": "368320",
+      "virgilio": "368321",
+      "dante": "368322"
+    }
+  },
+  "pattern_event_rows_loaded": 15,
+  "pattern_summary_rows_loaded": 2,
+  "candidate_evaluation_rows_exported": 391
+}

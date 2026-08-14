@@ -1,0 +1,35 @@
+{
+  "as_is_supplier_spend_eur": 276396.5830052493,
+  "operational_supplier_spend_eur": 273940.48911933816,
+  "combined_supplier_spend_eur": 273169.52102967916,
+  "operational_saving_vs_as_is_eur": 2456.093885911163,
+  "combined_saving_vs_as_is_eur": 3227.0619755701628,
+  "external_incremental_saving_vs_operational_eur": 770.9680896589998,
+  "external_incremental_uplift_percent": 31.39000891136479,
+  "combined_decisions_evaluated": 170,
+  "combined_positive_expected_advantage_decisions": 17,
+  "combined_total_expected_advantage_eur": 1407.9927955662365,
+  "combined_max_expected_advantage_eur": 253.006558828165,
+  "external_driver_counts": {
+    "Crude": 170,
+    "Currency": 170,
+    "Supply": 70,
+    "Geopolitics": 50,
+    "Refined product": 50,
+    "Logistics": 30,
+    "Supply and demand": 10,
+    "Refining and supply": 10
+  },
+  "external_theme_counts": {
+    "HORMUZ_RECOVERY": 70,
+    "IRAN_SUPPLY_ACCESS": 30,
+    "OPEC_OUTPUT_INCREASE": 30,
+    "GULF_SUPPLY_RECOVERY": 20,
+    "HORMUZ_ESCALATION": 10,
+    "RUSSIA_DIESEL_EXPORT_BAN": 10
+  },
+  "same_total_litres_as_is_vs_combined": true,
+  "same_closing_inventory_as_is_vs_combined": true,
+  "no_additional_lost_sales_vs_as_is": true,
+  "comparison_is_like_for_like": true
+}

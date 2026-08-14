@@ -1,0 +1,9 @@
+{
+  "lookback_days": 7,
+  "macro_external_weight": 0.65,
+  "local_market_weight": 0.35,
+  "minimum_competitors": 2,
+  "max_expected_change_eur_per_litre_day": 0.006,
+  "retail_to_supplier_pass_through": 0.35,
+  "disagreement_penalty": 0.1
+}

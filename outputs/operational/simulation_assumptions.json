@@ -1,0 +1,55 @@
+{
+  "data_integration_settings": {
+    "quotation_price_divisor": 1000.0,
+    "simulation_start": "2026-06-16",
+    "simulation_end": "2026-07-08",
+    "ignored_products": [
+      "Performance"
+    ],
+    "product_mapping": {
+      "Verde": "Benzina Synergy",
+      "Diesel": "Gasolio Synergy"
+    },
+    "distributor_mapping": {
+      "MG 368318": "368318",
+      "MG340 368319": "368319",
+      "Scoglio del Tonno 368320": "368320",
+      "Virgilio 368321": "368321",
+      "Dante 368322": "368322"
+    },
+    "monthly_name_mapping": {
+      "taras": "368318",
+      "lorenzo": "368319",
+      "scoglio": "368320",
+      "virgilio": "368321",
+      "dante": "368322"
+    }
+  },
+  "measured_inputs": {
+    "tank_capacity_and_opening_inventory": "Serbatoi.xlsx",
+    "opening_implicit_cost_and_selling_price": "Serbatoi.xlsx",
+    "weekday_sales_profiles": "Litres.xlsx",
+    "2026_growth_factors": "Litri Venduti.xlsx",
+    "quotation_prices_and_regimes": "daily_analysis.csv"
+  },
+  "simulation_policy": {
+    "status": "Temporary modelling policy; not claimed to be the client's historical purchasing behaviour.",
+    "as_is": [
+      "Trigger a purchase when current inventory cannot cover expected demand for today and the next day.",
+      "Replenish to the opening inventory level recorded in Serbatoi, limited by physical tank capacity."
+    ],
+    "widget": [
+      "Use the same stockout-protection trigger.",
+      "Wait during falling quotations unless stockout protection is triggered.",
+      "Use available tank capacity during rising quotations or regulatory events.",
+      "Behave like AS IS during stable periods."
+    ],
+    "not_applied_because_not_supplied": [
+      "Minimum order quantity",
+      "Order rounding increment",
+      "Maximum fill ratio below physical capacity",
+      "Supplier lead time",
+      "Confirmed safety-stock policy"
+    ]
+  }
+}

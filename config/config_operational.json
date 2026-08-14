@@ -1,0 +1,13 @@
+{
+  "quotation_price_divisor": 1000.0,
+  "planning_horizon_days": 14,
+  "safety_days": 1,
+  "max_fill_ratio": 1.0,
+  "minimum_order_litres": 0.0,
+  "order_cost_eur": 0.0,
+  "holding_cost_eur_per_litre_day": 0.0,
+  "working_capital_cost_rate_daily": 0.0,
+  "risk_aversion": 0.0,
+  "max_pattern_age_days": 7,
+  "missing_pattern_confidence": 0.5
+}

@@ -1,0 +1,127 @@
+{
+  "strategy": "WIDGET_EXTERNAL",
+  "comparison_strategies": [
+    "AS_IS",
+    "WIDGET",
+    "WIDGET_EXTERNAL"
+  ],
+  "formula": "robust objective = immediate purchase + probability-weighted future purchase + holding + working capital + order costs + confidence-adjusted downside",
+  "historical_saving_definition": "supplier-spend difference between strategies; clean like-for-like only when equal litres, equal closing inventory and no additional lost sales checks pass",
+  "expected_advantage_definition": "ex-ante candidate objective improvement used for decision selection; not added to historical supplier-spend saving",
+  "causal_rule": "only internal and external observations available at or before the decision cutoff are used",
+  "external_market_rows": 58,
+  "external_news_rows": 14,
+  "pattern_event_rows": 15,
+  "pattern_summary_rows": 2,
+  "comparison_validation": {
+    "same_total_litres_as_is_vs_combined": true,
+    "same_closing_inventory_as_is_vs_combined": true,
+    "no_additional_lost_sales_vs_as_is": true,
+    "comparison_is_like_for_like": true
+  },
+  "warning": "Historical simulation against a modelled reference policy. Pass-through coefficients, news annotations and candidate scenarios require calibration on more supplier quotation history and validation against actual orders.",
+  "operational_config": {
+    "quotation_price_divisor": 1000.0,
+    "simulation_start": "2026-06-16",
+    "simulation_end": "2026-07-08",
+    "ignored_products": [
+      "Performance"
+    ],
+    "safety_days": 1,
+    "planning_horizon_days": 14,
+    "max_fill_ratio": 1.0,
+    "minimum_order_litres": 0.0,
+    "order_cost_eur": 0.0,
+    "holding_cost_eur_per_litre_day": 0.0,
+    "working_capital_cost_rate_daily": 0.0,
+    "risk_aversion": 0.0,
+    "max_pattern_age_days": 7,
+    "missing_pattern_confidence": 0.5,
+    "confidence_labels": {
+      "very high": 0.95,
+      "high": 0.85,
+      "medium": 0.65,
+      "low": 0.45,
+      "very low": 0.25
+    },
+    "pattern_weights": {
+      "P01": 1.0,
+      "P02": 1.0,
+      "P03": 0.6,
+      "P04": 0.4,
+      "P05": 0.8,
+      "P06": 1.2,
+      "P07": 0.9
+    },
+    "product_mapping": {
+      "Verde": "Benzina Synergy",
+      "Diesel": "Gasolio Synergy"
+    },
+    "distributor_mapping": {
+      "MG 368318": "368318",
+      "MG340 368319": "368319",
+      "Scoglio del Tonno 368320": "368320",
+      "Virgilio 368321": "368321",
+      "Dante 368322": "368322"
+    },
+    "monthly_name_mapping": {
+      "taras": "368318",
+      "lorenzo": "368319",
+      "scoglio": "368320",
+      "virgilio": "368321",
+      "dante": "368322"
+    }
+  },
+  "external_config": {
+    "min_component_confidence": 0.15,
+    "max_data_age_days": 7,
+    "market_lookback_days": 10,
+    "news_theme_cap": 0.85,
+    "news_eur_per_litre_day_scale": 0.004,
+    "pass_through": {
+      "brent_spot_usd_per_barrel": 0.22,
+      "eur_usd": -0.18,
+      "ice_gasoil_continuous_usd_per_tonne": 0.55
+    },
+    "product_indicator_weights": {
+      "Diesel": {
+        "brent_spot_usd_per_barrel": 0.55,
+        "eur_usd": 0.35,
+        "ice_gasoil_continuous_usd_per_tonne": 1.0
+      },
+      "Verde": {
+        "brent_spot_usd_per_barrel": 0.85,
+        "eur_usd": 0.4,
+        "ice_gasoil_continuous_usd_per_tonne": 0.1
+      }
+    },
+    "market_scope_weights": {
+      "ITALY": 1.0,
+      "MEDITERRANEAN": 0.95,
+      "EUROPE": 0.9,
+      "GLOBAL_EUROPE": 0.85,
+      "GLOBAL": 0.75
+    },
+    "news_driver_weights": {
+      "Refining and supply": 1.0,
+      "Refined product supply": 0.95,
+      "Logistics": 0.9,
+      "Supply": 0.85,
+      "Geopolitics": 0.8,
+      "Currency": 0.7,
+      "Supply and demand": 0.65,
+      "Market outlook": 0.4
+    }
+  },
+  "combined_config": {
+    "internal_weight": 0.55,
+    "external_weight": 0.45,
+    "agreement_bonus": 0.1,
+    "disagreement_penalty": 0.2,
+    "scenario_uncertainty_multiplier": 1.25,
+    "min_objective_improvement_eur": 5.0,
+    "min_objective_improvement_ratio": 0.0005,
+    "min_combined_confidence_for_discretionary_buy": 0.2,
+    "decision_cutoff_hour_local": 8
+  }
+}
