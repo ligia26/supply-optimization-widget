@@ -183,6 +183,7 @@ def build_strategy_comparison(
     operational_decisions: list[Any],
     combined_ledgers: list[Any],
     combined_decisions: list[Any],
+    terminal_prices: dict[str, float],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
@@ -250,6 +251,13 @@ def build_strategy_comparison(
         as_is_spend = current["supplier_spend_eur"]
         operational_spend = operational["supplier_spend_eur"]
         combined_spend = combined["supplier_spend_eur"]
+        valuation_price = float(terminal_prices.get(product, 0.0))
+        as_is_inv_value = current["closing_inventory_litres"] * valuation_price
+        operational_inv_value = operational["closing_inventory_litres"] * valuation_price
+        combined_inv_value = combined["closing_inventory_litres"] * valuation_price
+        as_is_economic_cost = as_is_spend - as_is_inv_value
+        operational_economic_cost = operational_spend - operational_inv_value
+        combined_economic_cost = combined_spend - combined_inv_value
 
         rows.append(
             {
@@ -260,15 +268,21 @@ def build_strategy_comparison(
                 "operational_supplier_spend_eur": operational_spend,
                 "combined_supplier_spend_eur": combined_spend,
 
-                "operational_saving_vs_as_is_eur": (
-                    as_is_spend - operational_spend
-                ),
-                "combined_saving_vs_as_is_eur": (
-                    as_is_spend - combined_spend
-                ),
-                "external_incremental_saving_vs_operational_eur": (
-                    operational_spend - combined_spend
-                ),
+                "as_is_cash_spend_eur": as_is_spend,
+                "operational_cash_spend_eur": operational_spend,
+                "combined_cash_spend_eur": combined_spend,
+                "terminal_valuation_price_eur_per_litre": valuation_price,
+                "as_is_ending_inventory_value_eur": as_is_inv_value,
+                "operational_ending_inventory_value_eur": operational_inv_value,
+                "combined_ending_inventory_value_eur": combined_inv_value,
+                "as_is_inventory_adjusted_economic_cost_eur": as_is_economic_cost,
+                "operational_inventory_adjusted_economic_cost_eur": operational_economic_cost,
+                "combined_inventory_adjusted_economic_cost_eur": combined_economic_cost,
+                "operational_cash_saving_vs_as_is_eur": as_is_spend - operational_spend,
+                "combined_cash_saving_vs_as_is_eur": as_is_spend - combined_spend,
+                "operational_saving_vs_as_is_eur": as_is_economic_cost - operational_economic_cost,
+                "combined_saving_vs_as_is_eur": as_is_economic_cost - combined_economic_cost,
+                "external_incremental_saving_vs_operational_eur": operational_economic_cost - combined_economic_cost,
 
                 "as_is_litres_purchased": current["litres_purchased"],
                 "operational_litres_purchased": operational[
@@ -670,15 +684,21 @@ def portfolio_summary(
         for row in comparison_rows
     )
 
-    operational_saving = as_is_spend - operational_spend
-    combined_saving = as_is_spend - combined_spend
-    incremental_saving = operational_spend - combined_spend
+    as_is_economic_cost = sum(float(row["as_is_inventory_adjusted_economic_cost_eur"]) for row in comparison_rows)
+    operational_economic_cost = sum(float(row["operational_inventory_adjusted_economic_cost_eur"]) for row in comparison_rows)
+    combined_economic_cost = sum(float(row["combined_inventory_adjusted_economic_cost_eur"]) for row in comparison_rows)
+    operational_saving = as_is_economic_cost - operational_economic_cost
+    combined_saving = as_is_economic_cost - combined_economic_cost
+    incremental_saving = operational_economic_cost - combined_economic_cost
 
     return {
         "as_is_supplier_spend_eur": as_is_spend,
         "operational_supplier_spend_eur": operational_spend,
         "combined_supplier_spend_eur": combined_spend,
 
+        "as_is_inventory_adjusted_economic_cost_eur": as_is_economic_cost,
+        "operational_inventory_adjusted_economic_cost_eur": operational_economic_cost,
+        "combined_inventory_adjusted_economic_cost_eur": combined_economic_cost,
         "operational_saving_vs_as_is_eur": operational_saving,
         "combined_saving_vs_as_is_eur": combined_saving,
 
@@ -728,11 +748,8 @@ def portfolio_summary(
             no_extra_lost_sales
         ),
 
-        "comparison_is_like_for_like": (
-            same_litres
-            and same_inventory
-            and no_extra_lost_sales
-        ),
+        "comparison_is_like_for_like": no_extra_lost_sales,
+        "ending_inventory_difference_is_valued": True,
     }
 
 

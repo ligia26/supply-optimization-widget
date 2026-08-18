@@ -83,20 +83,27 @@ def build_combined_scenarios(
     probabilities = (0.10, 0.20, 0.40, 0.20, 0.10)
     uncertainty_multipliers = (-1.0, -0.5, 0.0, 0.5, 1.0)
 
+    # Residual/uncertainty scenarios describe dispersion around the signal,
+    # not an additional directional forecast. Re-centre the shocks so their
+    # probability-weighted mean is zero. This guarantees that the expected
+    # scenario change equals the combined causal forecast itself.
+    raw_shocks = [
+        _quantile(residuals, q) + m * uncertainty_band
+        for q, m in zip(quantiles, uncertainty_multipliers)
+    ]
+    weighted_shock = sum(p * shock for p, shock in zip(probabilities, raw_shocks))
+    centred_shocks = [shock - weighted_shock for shock in raw_shocks]
+
     return tuple(
         PriceScenario(
             name=f"combined empirical q{int(q * 100)}",
             probability=probability,
             daily_change_eur_per_litre=(
-                signal.expected_change_per_litre_day
-                + _quantile(residuals, q)
-                + uncertainty_multiplier * uncertainty_band
+                signal.expected_change_per_litre_day + shock
             ),
         )
-        for q, probability, uncertainty_multiplier in zip(
-            quantiles,
-            probabilities,
-            uncertainty_multipliers,
+        for q, probability, shock in zip(
+            quantiles, probabilities, centred_shocks
         )
     )
 
@@ -163,14 +170,35 @@ def evaluate_combined_candidates(
         required_buy=required_buy,
         config=operational_config,
     ):
-        future_need = max(
+        usable_inventory_for_demand = max(
             0.0,
-            total_demand - (inventory + buy),
+            inventory + buy - operational_config.hard_min_stock_litres,
         )
+        raw_future_need = max(
+            0.0,
+            total_demand - usable_inventory_for_demand,
+        )
+        # Future procurement is not infinitely divisible: if a future shortfall
+        # exists, the operator will have to place at least one standard order.
+        # Costing only the raw shortfall (e.g. 11 L) massively understates the
+        # value of buying a 5,000 L standard load earlier at a cheaper price.
+        future_need = (
+            max(raw_future_need, operational_config.minimum_order_litres)
+            if raw_future_need > 1e-9
+            else 0.0
+        )
+        if future_need > 0 and operational_config.order_rounding_litres > 0:
+            future_need = (
+                math.ceil(
+                    (future_need - 1e-9)
+                    / operational_config.order_rounding_litres
+                )
+                * operational_config.order_rounding_litres
+            )
 
         covered_fraction = min(
             1.0,
-            (inventory + buy) / max(total_demand, 1e-9),
+            usable_inventory_for_demand / max(total_demand, 1e-9),
         )
 
         expected_wait_days = max(
@@ -297,89 +325,73 @@ def select_combined_candidate(
     required_buy: float,
     signal: CombinedSignal,
     config: CombinedConfig,
-) -> tuple[
-    CandidateEvaluation,
-    CandidateEvaluation,
-    str,
-]:
-    """
-    Select the best combined candidate while keeping the operational minimum
-    as the hard feasibility floor.
+) -> tuple[CandidateEvaluation, CandidateEvaluation, str]:
+    """Select a combined candidate with conservative, evidence-scaled anticipation.
+
+    Operational litres are always allowed. Discretionary litres are only allowed
+    when the combined forecast is bullish, sufficiently confident, economically
+    meaningful, and the current price is not already expensive. The amount that
+    may be brought forward is capped by confidence; disagreement between internal
+    and external evidence is capped at one standard 5k tranche.
     """
     if not candidates:
-        raise ValueError(
-            "No feasible candidates generated"
-        )
+        raise ValueError("No feasible candidates generated")
 
     required = min(
         candidates,
-        key=lambda candidate: (
-            abs(
-                candidate.purchase_litres
-                - required_buy
-            ),
-            candidate.robust_objective_eur,
-        ),
+        key=lambda c: (abs(c.purchase_litres - required_buy), c.robust_objective_eur),
     )
-
-    best = min(
+    best_unconstrained = min(
         candidates,
-        key=lambda candidate: (
-            candidate.robust_objective_eur,
-            candidate.purchase_litres,
-        ),
+        key=lambda c: (c.robust_objective_eur, c.purchase_litres),
     )
 
-    improvement = (
-        required.robust_objective_eur
-        - best.robust_objective_eur
-    )
+    if best_unconstrained.purchase_litres <= required.purchase_litres + 1e-9:
+        return best_unconstrained, required, "Combined objective does not require discretionary litres"
 
-    improvement_ratio = (
-        improvement
-        / max(
-            required.robust_objective_eur,
-            1e-9,
-        )
-    )
+    adjusted_signal = signal.score * signal.confidence
+    if signal.expected_change_per_litre_day <= 0:
+        return required, required, "Operational minimum: combined forecast is not bullish"
+    if signal.price_percentile > config.max_price_percentile_for_discretionary_buy:
+        return required, required, "Operational minimum: current quotation is too expensive for advance buying"
+    if signal.confidence < config.min_combined_confidence_for_discretionary_buy:
+        return required, required, "Operational minimum: combined confidence is insufficient for strategic inventory"
+    if adjusted_signal < config.min_adjusted_signal_for_discretionary_buy:
+        return required, required, "Operational minimum: confidence-adjusted signal is too weak"
 
+    # Evidence-scaled strategic cap. Moderate evidence may advance one 5k tranche;
+    # stronger evidence can advance more, but never jump directly to filling spare
+    # capacity. This implements the V3 rule: weak/moderate signal -> stay close to
+    # operational minimum; strong/high-confidence signal -> allow larger anticipation.
+    if signal.confidence < 0.70:
+        cap = config.max_discretionary_litres_moderate_confidence
+    elif signal.confidence < 0.85:
+        cap = config.max_discretionary_litres_high_confidence
+    else:
+        cap = config.max_discretionary_litres_very_high_confidence
+
+    # If internal and external directional evidence disagree, do not let the
+    # combined engine advance more than one standard tranche.
+    if signal.internal_score * signal.external_score < 0:
+        cap = min(cap, config.max_discretionary_litres_moderate_confidence)
+
+    max_allowed = required.purchase_litres + cap
+    eligible = [c for c in candidates if c.purchase_litres <= max_allowed + 1e-9]
+    best = min(eligible, key=lambda c: (c.robust_objective_eur, c.purchase_litres))
+
+    improvement = required.robust_objective_eur - best.robust_objective_eur
+    improvement_ratio = improvement / max(required.robust_objective_eur, 1e-9)
     if (
-        signal.expected_change_per_litre_day <= 0
-        and best.purchase_litres
-        > required.purchase_litres
+        best.purchase_litres <= required.purchase_litres + 1e-9
+        or improvement < config.min_objective_improvement_eur
+        or improvement_ratio < config.min_objective_improvement_ratio
     ):
-        return (
-            required,
-            required,
-            "Operational minimum: combined evidence does not support advance buying",
-        )
+        return required, required, "Operational minimum: economic advantage is below action threshold"
 
-    if (
-        signal.confidence
-        < config.min_combined_confidence_for_discretionary_buy
-        and best.purchase_litres
-        > required.purchase_litres
-    ):
-        return (
-            required,
-            required,
-            "Operational minimum: combined confidence is insufficient",
-        )
-
-    if (
-        improvement
-        < config.min_objective_improvement_eur
-        or improvement_ratio
-        < config.min_objective_improvement_ratio
-    ):
-        return (
-            required,
-            required,
-            "Operational minimum: objective improvement is below action threshold",
-        )
-
+    discretionary = best.purchase_litres - required.purchase_litres
     return (
         best,
         required,
-        "Combined internal/external robust objective supports advance purchase",
+        f"Combined evidence supports a capped strategic advance of {discretionary:.0f} L",
     )
+

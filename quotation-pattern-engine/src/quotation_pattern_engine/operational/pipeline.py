@@ -17,6 +17,7 @@ from .loaders import (
 )
 from .models import CandidateEvaluation, DailyLedgerRow, PurchaseDecision, TankState
 from .simulator import simulate_strategy
+from quotation_pattern_engine.audit_workbook import write_simulation_audit_workbook
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
@@ -43,8 +44,12 @@ def build_comparison(
     ledgers: list[DailyLedgerRow],
     decisions: list[PurchaseDecision],
     tanks: list[TankState],
+    quotations,
 ) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
+    terminal_price = {}
+    for q in sorted(quotations, key=lambda row: row.date):
+        terminal_price[q.product] = q.price_per_litre
 
     for tank in sorted(tanks, key=lambda row: (row.distributor_id, row.product)):
         metrics: dict[str, dict[str, float]] = {}
@@ -90,19 +95,14 @@ def build_comparison(
         baseline = metrics["AS_IS"]
         widget = metrics["WIDGET"]
 
-        if abs(baseline["closing"] - widget["closing"]) > 0.05:
-            raise ValueError(
-                f"Closing inventory mismatch for "
-                f"{tank.distributor_id}/{tank.product}"
-            )
-
-        if abs(baseline["litres"] - widget["litres"]) > 0.05:
-            raise ValueError(
-                f"Purchased-volume mismatch for "
-                f"{tank.distributor_id}/{tank.product}"
-            )
-
-        saving = baseline["spend"] - widget["spend"]
+        valuation_price = terminal_price.get(tank.product, 0.0)
+        baseline_inventory_value = baseline["closing"] * valuation_price
+        widget_inventory_value = widget["closing"] * valuation_price
+        baseline_economic_cost = baseline["spend"] - baseline_inventory_value
+        widget_economic_cost = widget["spend"] - widget_inventory_value
+        cash_saving = baseline["spend"] - widget["spend"]
+        inventory_value_adjustment = baseline_inventory_value - widget_inventory_value
+        saving = baseline_economic_cost - widget_economic_cost
 
         result.append(
             {
@@ -110,10 +110,17 @@ def build_comparison(
                 "product": tank.product,
                 "as_is_supplier_spend_eur": baseline["spend"],
                 "cuebit_supplier_spend_eur": widget["spend"],
+                "cash_saving_eur": cash_saving,
+                "terminal_valuation_price_eur_per_litre": valuation_price,
+                "as_is_ending_inventory_value_eur": baseline_inventory_value,
+                "cuebit_ending_inventory_value_eur": widget_inventory_value,
+                "ending_inventory_value_difference_eur": inventory_value_adjustment,
+                "as_is_inventory_adjusted_economic_cost_eur": baseline_economic_cost,
+                "cuebit_inventory_adjusted_economic_cost_eur": widget_economic_cost,
                 "estimated_saving_eur": saving,
                 "estimated_saving_percent": (
-                    saving / baseline["spend"] * 100
-                    if baseline["spend"]
+                    saving / baseline_economic_cost * 100
+                    if baseline_economic_cost
                     else 0.0
                 ),
                 "as_is_litres_purchased": baseline["litres"],
@@ -270,7 +277,7 @@ def _baseline_replacement_map(
     for baseline in baseline_purchases:
         if baseline.date <= decision.date:
             continue
-        if baseline.reason == "Final quotation-date stock equalisation":
+        if baseline.reason == "Terminal inventory adjustment":
             continue
         if remaining <= 0.05:
             break
@@ -290,8 +297,11 @@ def _write_baseline_summary(
     lines += [
         "### Operational baseline",
         "",
-        "The baseline buys only the volume needed to remain feasible until "
-        "the next observed quotation.",
+        "The baseline uses a lead-time-aware reorder point (700 L hard floor "
+        "+ expected lead-time demand). When triggered, it buys only the smallest "
+        "standard quantity needed to remain operational: at least 5,000 L, "
+        "rounded to 1,000 L, subject to the 95% usable-fill cap. It has no "
+        "price intelligence and does not deliberately fill spare capacity.",
         "",
         "| Date | Inventory before | Demand cover required | Purchase | Quotation |",
         "|---|---:|---:|---:|---:|",
@@ -515,7 +525,7 @@ def _write_report(
     lines = [
         "# CUEBIT purchasing simulation — decision audit",
         "",
-        "> Same demand, same purchased litres and same closing inventory. "
+        "> Same demand and physical constraints; purchased litres and ending inventory may differ. "
         "The difference is when the fuel is purchased, how much is purchased "
         "on each quotation date and which quotation is paid.",
         "",
@@ -619,7 +629,7 @@ def _write_report(
             decision
             for decision in widget_purchases
             if decision.reason
-            != "Final quotation-date stock equalisation"
+            != "Terminal inventory adjustment"
         ]
 
         if non_terminal:
@@ -642,7 +652,7 @@ def _write_report(
             decision
             for decision in widget_purchases
             if decision.reason
-            == "Final quotation-date stock equalisation"
+            == "Terminal inventory adjustment"
         ]
         if terminal:
             lines += [
@@ -714,7 +724,7 @@ def run_operational_simulation(
         ledgers.extend(strategy_ledgers)
         decisions.extend(strategy_decisions)
 
-    comparison = build_comparison(ledgers, decisions, tanks)
+    comparison = build_comparison(ledgers, decisions, tanks, quotations)
 
     paths = {
         "economic_report": output / "cuebit_economic_result.md",
@@ -725,6 +735,7 @@ def run_operational_simulation(
         "demand_profiles": output / "demand_profiles.csv",
         "tank_states": output / "tank_states.csv",
         "simulation_method": output / "simulation_method.json",
+        "simulation_audit_workbook": output / "simulation_audit.xlsx",
     }
 
     _write_csv(paths["economic_comparison"], comparison)
@@ -759,6 +770,15 @@ def run_operational_simulation(
         decisions,
     )
 
+    write_simulation_audit_workbook(
+        paths["simulation_audit_workbook"],
+        ledgers=ledgers,
+        decisions=decisions,
+        comparison_rows=comparison,
+        config=config,
+        title="CUEBIT Operational — Simulation Audit",
+    )
+
     paths["simulation_method"].write_text(
         json.dumps(
             {
@@ -776,9 +796,10 @@ def run_operational_simulation(
                     "Loaded for audit but excluded from causal decisions "
                     "because whole-period summaries would leak future data"
                 ),
-                "same_total_litres": True,
-                "same_closing_inventory": True,
-                "terminal_inventory_credit": False,
+                "same_total_litres": False,
+                "same_closing_inventory": False,
+                "terminal_inventory_credit": True,
+                "terminal_valuation_method": "last observed quotation by product",
                 "decision_trace": (
                     "Every feasible WIDGET candidate is exported with its "
                     "purchase cost, expected future cost, holding cost, "

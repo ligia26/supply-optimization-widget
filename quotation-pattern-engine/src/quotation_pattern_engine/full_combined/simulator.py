@@ -23,7 +23,7 @@ from quotation_pattern_engine.operational.models import (
     QuotationPoint,
     TankState,
 )
-from quotation_pattern_engine.operational.optimizer import demand_between
+from quotation_pattern_engine.operational.optimizer import operational_required_buy
 from quotation_pattern_engine.operational.signal_model import build_signal
 
 from quotation_pattern_engine.combined.config import CombinedConfig
@@ -139,10 +139,11 @@ def simulate_full_strategy(
     )
 
     inventory = {
-        (
-            tank.distributor_id,
-            tank.product,
-        ): tank.opening_inventory_litres
+        (tank.distributor_id, tank.product): tank.opening_inventory_litres
+        for tank in tanks
+    }
+    implicit_cost = {
+        (tank.distributor_id, tank.product): tank.opening_implicit_cost_per_litre
         for tank in tanks
     }
 
@@ -188,6 +189,7 @@ def simulate_full_strategy(
             )
 
             opening = inventory[key]
+            opening_implicit = implicit_cost[key]
 
             demand = lookup.get(
                 (
@@ -269,22 +271,13 @@ def simulate_full_strategy(
                     end + timedelta(days=1),
                 )
 
-                required_target = demand_between(
-                    lookup,
-                    tank.distributor_id,
-                    tank.product,
-                    day,
-                    required_end,
-                )
-
-                required_buy = max(
-                    0.0,
-                    min(
-                        required_target,
-                        tank.capacity_litres
-                        * operational_config.max_fill_ratio,
-                    )
-                    - opening,
+                required_buy = operational_required_buy(
+                    lookup=lookup,
+                    tank=tank,
+                    inventory=opening,
+                    day=day,
+                    required_end=required_end,
+                    config=operational_config,
                 )
 
                 candidate_trace: tuple[
@@ -292,84 +285,60 @@ def simulate_full_strategy(
                     ...
                 ] = ()
 
-                if day == end:
-                    purchase = max(
-                        0.0,
-                        min(
-                            tank.capacity_litres
-                            * operational_config.max_fill_ratio,
-                            tank.opening_inventory_litres
-                            + demand,
-                        )
-                        - opening,
-                    )
+                candidates = evaluate_combined_candidates(
+                    day=day,
+                    end=end,
+                    tank=tank,
+                    inventory=opening,
+                    current_price=(
+                        point.price_per_litre
+                    ),
+                    required_buy=required_buy,
+                    demand_lookup=lookup,
+                    signal=combined_signal,
+                    history=history,
+                    operational_config=(
+                        operational_config
+                    ),
+                    combined_config=combined_config,
+                )
 
-                    chosen_cost = (
-                        purchase
-                        * point.price_per_litre
-                    )
-                    required_cost = chosen_cost
-                    selected_cover = 0.0
-                    downside = 0.0
-                    reason = (
-                        "Final quotation-date stock equalisation"
-                    )
+                (
+                    chosen,
+                    required,
+                    reason,
+                ) = select_combined_candidate(
+                    candidates,
+                    required_buy,
+                    combined_signal,
+                    combined_config,
+                )
 
-                else:
-                    candidates = evaluate_combined_candidates(
-                        day=day,
-                        end=end,
-                        tank=tank,
-                        inventory=opening,
-                        current_price=(
-                            point.price_per_litre
-                        ),
-                        required_buy=required_buy,
-                        demand_lookup=lookup,
-                        signal=combined_signal,
-                        history=history,
-                        operational_config=(
-                            operational_config
-                        ),
-                        combined_config=combined_config,
-                    )
+                purchase = max(
+                    required_buy,
+                    chosen.purchase_litres,
+                )
 
-                    (
+                selected_cover = (
+                    chosen.target_cover_days
+                )
+                chosen_cost = (
+                    chosen.robust_objective_eur
+                )
+                required_cost = (
+                    required.robust_objective_eur
+                )
+                downside = (
+                    chosen.downside_cost_eur
+                )
+
+                candidate_trace = (
+                    _mark_candidate_trace(
+                        candidates,
                         chosen,
                         required,
-                        reason,
-                    ) = select_combined_candidate(
-                        candidates,
-                        required_buy,
-                        combined_signal,
-                        combined_config,
                     )
-
-                    purchase = max(
-                        required_buy,
-                        chosen.purchase_litres,
-                    )
-
-                    selected_cover = (
-                        chosen.target_cover_days
-                    )
-                    chosen_cost = (
-                        chosen.robust_objective_eur
-                    )
-                    required_cost = (
-                        required.robust_objective_eur
-                    )
-                    downside = (
-                        chosen.downside_cost_eur
-                    )
-
-                    candidate_trace = (
-                        _mark_candidate_trace(
-                            candidates,
-                            chosen,
-                            required,
-                        )
-                    )
+                )
 
                 purchase = min(
                     purchase,
@@ -479,6 +448,17 @@ def simulate_full_strategy(
 
                 decisions.append(decision)
 
+            purchase_price = point.price_per_litre if point is not None and purchase > 0 else 0.0
+            if purchase > 0:
+                post_purchase_inventory = opening + purchase
+                closing_implicit = (
+                    (opening * opening_implicit + purchase * purchase_price)
+                    / post_purchase_inventory
+                    if post_purchase_inventory > 1e-9 else opening_implicit
+                )
+            else:
+                closing_implicit = opening_implicit
+
             sold = min(
                 demand,
                 opening + purchase,
@@ -490,7 +470,15 @@ def simulate_full_strategy(
             closing = (
                 opening + purchase - sold
             )
+            if closing < operational_config.hard_min_stock_litres - 0.05:
+                raise ValueError(
+                    f"Hard minimum stock breached for combined strategy "
+                    f"{tank.distributor_id}/{tank.product} on {day}: "
+                    f"{closing:.2f} L < "
+                    f"{operational_config.hard_min_stock_litres:.2f} L"
+                )
             inventory[key] = closing
+            implicit_cost[key] = closing_implicit
 
             ledgers.append(
                 DailyLedgerRow(
@@ -500,10 +488,10 @@ def simulate_full_strategy(
                         tank.distributor_id
                     ),
                     product=tank.product,
-                    opening_inventory_litres=(
-                        opening
-                    ),
+                    opening_inventory_litres=opening,
+                    opening_implicit_cost_per_litre=opening_implicit,
                     purchase_litres=purchase,
+                    purchase_price_eur_per_litre=purchase_price,
                     purchase_total_eur=(
                         decision.purchase_spend_eur
                         if decision
@@ -511,9 +499,8 @@ def simulate_full_strategy(
                     ),
                     sales_litres=sold,
                     lost_sales_litres=lost,
-                    closing_inventory_litres=(
-                        closing
-                    ),
+                    closing_inventory_litres=closing,
+                    closing_implicit_cost_per_litre=closing_implicit,
                     regime=(
                         point.regime
                         if point

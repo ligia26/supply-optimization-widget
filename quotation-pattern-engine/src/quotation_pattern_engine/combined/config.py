@@ -14,7 +14,12 @@ class CombinedConfig:
     scenario_uncertainty_multiplier: float = 1.25
     min_objective_improvement_eur: float = 5.0
     min_objective_improvement_ratio: float = 0.0005
-    min_combined_confidence_for_discretionary_buy: float = 0.20
+    min_combined_confidence_for_discretionary_buy: float = 0.50
+    min_adjusted_signal_for_discretionary_buy: float = 0.08
+    max_price_percentile_for_discretionary_buy: float = 0.80
+    max_discretionary_litres_moderate_confidence: float = 5000.0
+    max_discretionary_litres_high_confidence: float = 10000.0
+    max_discretionary_litres_very_high_confidence: float = 15000.0
     decision_cutoff_hour_local: int = 8
 
     def __post_init__(self) -> None:
@@ -24,6 +29,10 @@ class CombinedConfig:
             raise ValueError("at least one signal weight must be positive")
         if not 0 <= self.min_combined_confidence_for_discretionary_buy <= 1:
             raise ValueError("minimum confidence must be in [0, 1]")
+        if not -1 <= self.min_adjusted_signal_for_discretionary_buy <= 1:
+            raise ValueError("minimum adjusted signal must be in [-1, 1]")
+        if not 0 <= self.max_price_percentile_for_discretionary_buy <= 1:
+            raise ValueError("maximum price percentile must be in [0, 1]")
 
     @classmethod
     def from_json(cls, path: str | Path) -> "CombinedConfig":

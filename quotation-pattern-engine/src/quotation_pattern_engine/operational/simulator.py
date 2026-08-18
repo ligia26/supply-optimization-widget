@@ -6,7 +6,12 @@ from datetime import date, timedelta
 
 from .config import OperationalConfig
 from .models import *
-from .optimizer import demand_between, evaluate_candidates
+from .optimizer import (
+    baseline_replenishment_buy,
+    evaluate_candidates,
+    operational_required_buy,
+    reorder_point_litres,
+)
 from .signal_model import build_signal
 
 
@@ -78,6 +83,10 @@ def simulate_strategy(
         (t.distributor_id, t.product): t.opening_inventory_litres
         for t in tanks
     }
+    implicit_cost = {
+        (t.distributor_id, t.product): t.opening_implicit_cost_per_litre
+        for t in tanks
+    }
 
     ledger: list[DailyLedgerRow] = []
     decisions: list[PurchaseDecision] = []
@@ -92,6 +101,7 @@ def simulate_strategy(
         ):
             key = (tank.distributor_id, tank.product)
             opening = inv[key]
+            opening_implicit = implicit_cost[key]
             today = lookup.get(
                 (tank.distributor_id, tank.product, day.weekday()),
                 0.0,
@@ -123,20 +133,13 @@ def simulate_strategy(
                     next_quotation,
                     end + timedelta(days=1),
                 )
-                required_target = demand_between(
-                    lookup,
-                    tank.distributor_id,
-                    tank.product,
-                    day,
-                    required_end,
-                )
-                required_buy = max(
-                    0.0,
-                    min(
-                        required_target,
-                        tank.capacity_litres * config.max_fill_ratio,
-                    )
-                    - opening,
+                required_buy = operational_required_buy(
+                    lookup=lookup,
+                    tank=tank,
+                    inventory=opening,
+                    day=day,
+                    required_end=required_end,
+                    config=config,
                 )
 
                 candidates: list[CandidateEvaluation] = []
@@ -144,27 +147,21 @@ def simulate_strategy(
                 required = None
                 chosen = None
 
-                if day == end:
-                    purchase = max(
-                        0.0,
-                        min(
-                            tank.capacity_litres * config.max_fill_ratio,
-                            tank.opening_inventory_litres + today,
-                        )
-                        - opening,
+                if strategy == "AS_IS":
+                    purchase, reorder_point = baseline_replenishment_buy(
+                        lookup=lookup,
+                        tank=tank,
+                        inventory=opening,
+                        day=day,
+                        required_end=required_end,
+                        config=config,
                     )
-                    selected_cover_days = 0.0
-                    reason = "Final quotation-date stock equalisation"
-                    downside = 0.0
-
-                elif strategy == "AS_IS":
-                    purchase = required_buy
-                    selected_cover_days = float(
-                        (required_end - day).days
-                    )
+                    selected_cover_days = float((required_end - day).days)
                     reason = (
-                        "Operational minimum required to cover demand "
-                        "until the next observed quotation"
+                        "Baseline replenishment: lead-time-aware reorder point "
+                        f"{reorder_point:,.0f} L; smallest feasible standard order"
+                        if purchase > 0
+                        else "Baseline hold: inventory above reorder point and 700 L floor remains protected"
                     )
                     downside = 0.0
 
@@ -181,14 +178,10 @@ def simulate_strategy(
                         history=history,
                         config=config,
                     )
-
                     required = min(
                         candidates,
                         key=lambda candidate: (
-                            abs(
-                                candidate.purchase_litres
-                                - required_buy
-                            ),
+                            abs(candidate.purchase_litres - required_buy),
                             candidate.robust_objective_eur,
                         ),
                     )
@@ -200,31 +193,27 @@ def simulate_strategy(
                         ),
                     )
 
-                    # Bearish evidence may justify waiting, but never below
-                    # the operational feasibility floor.
+                    adjusted_signal = signal.score * signal.confidence
+                    discretionary_supported = (
+                        signal.expected_change_per_litre_day > 0
+                        and adjusted_signal >= config.discretionary_min_adjusted_signal
+                        and signal.price_percentile <= config.discretionary_max_price_percentile
+                    )
                     if (
-                        signal.score <= 0
-                        and chosen.purchase_litres
-                        > required.purchase_litres
+                        chosen.purchase_litres > required.purchase_litres
+                        and not discretionary_supported
                     ):
                         chosen = required
 
-                    purchase = max(
-                        required_buy,
-                        chosen.purchase_litres,
-                    )
+                    purchase = max(required_buy, chosen.purchase_litres)
                     selected_cover_days = chosen.target_cover_days
                     reason = (
-                        "Operational minimum selected"
+                        "Operational minimum selected: discretionary evidence below threshold"
                         if chosen is required
-                        else "Lowest robust expected-cost volume"
+                        else "Strategic advance purchase: strong low-price/rising-price evidence"
                     )
                     downside = chosen.downside_cost_eur
-                    candidate_trace = _mark_candidate_trace(
-                        candidates,
-                        chosen,
-                        required,
-                    )
+                    candidate_trace = _mark_candidate_trace(candidates, chosen, required)
 
                 purchase = min(
                     purchase,
@@ -236,7 +225,7 @@ def simulate_strategy(
                     ),
                 )
 
-                if strategy == "WIDGET" and day != end:
+                if strategy == "WIDGET":
                     chosen_cost = chosen.robust_objective_eur
                     required_cost = required.robust_objective_eur
                 else:
@@ -289,10 +278,29 @@ def simulate_strategy(
                 )
                 decisions.append(decision)
 
+            purchase_price = point.price_per_litre if point is not None and purchase > 0 else 0.0
+            if purchase > 0:
+                inventory_value_before = opening * opening_implicit
+                purchased_value = purchase * purchase_price
+                post_purchase_inventory = opening + purchase
+                closing_implicit = (
+                    (inventory_value_before + purchased_value) / post_purchase_inventory
+                    if post_purchase_inventory > 1e-9 else opening_implicit
+                )
+            else:
+                closing_implicit = opening_implicit
+
             sold = min(today, opening + purchase)
             lost = max(0.0, today - sold)
             closing = opening + purchase - sold
+            if closing < config.hard_min_stock_litres - 0.05:
+                raise ValueError(
+                    f"Hard minimum stock breached for {strategy} "
+                    f"{tank.distributor_id}/{tank.product} on {day}: "
+                    f"{closing:.2f} L < {config.hard_min_stock_litres:.2f} L"
+                )
             inv[key] = closing
+            implicit_cost[key] = closing_implicit
 
             regime = (
                 point.regime
@@ -307,7 +315,9 @@ def simulate_strategy(
                     distributor_id=tank.distributor_id,
                     product=tank.product,
                     opening_inventory_litres=opening,
+                    opening_implicit_cost_per_litre=opening_implicit,
                     purchase_litres=purchase,
+                    purchase_price_eur_per_litre=purchase_price,
                     purchase_total_eur=(
                         decision.purchase_spend_eur
                         if decision
@@ -316,6 +326,7 @@ def simulate_strategy(
                     sales_litres=sold,
                     lost_sales_litres=lost,
                     closing_inventory_litres=closing,
+                    closing_implicit_cost_per_litre=closing_implicit,
                     regime=regime,
                 )
             )

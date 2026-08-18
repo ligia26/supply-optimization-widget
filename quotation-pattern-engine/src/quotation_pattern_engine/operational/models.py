@@ -137,9 +137,12 @@ class DailyLedgerRow:
     distributor_id: str
     product: str
     opening_inventory_litres: float
+    opening_implicit_cost_per_litre: float
     purchase_litres: float
+    purchase_price_eur_per_litre: float
     purchase_total_eur: float
     sales_litres: float
     lost_sales_litres: float
     closing_inventory_litres: float
+    closing_implicit_cost_per_litre: float
     regime: str

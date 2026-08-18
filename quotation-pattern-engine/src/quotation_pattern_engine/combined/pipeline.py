@@ -32,6 +32,7 @@ from .reporting import (
     write_markdown_report,
 )
 from .simulator import simulate_combined_strategy
+from quotation_pattern_engine.audit_workbook import write_simulation_audit_workbook
 
 
 def run_combined_simulation(
@@ -89,12 +90,17 @@ def run_combined_simulation(
         combined_config,
     )
 
+    terminal_prices = {}
+    for quotation in sorted(quotations, key=lambda row: row.date):
+        terminal_prices[quotation.product] = quotation.price_per_litre
+
     comparison_rows = build_strategy_comparison(
         tanks=tanks,
         operational_ledgers=operational_ledgers,
         operational_decisions=operational_decisions,
         combined_ledgers=combined_ledgers,
         combined_decisions=combined_decisions,
+        terminal_prices=terminal_prices,
     )
     side_by_side_rows = build_side_by_side_decisions(
         operational_decisions,
@@ -112,6 +118,7 @@ def run_combined_simulation(
         "candidate_evaluations_external": output / "candidate_evaluations_external.csv",
         "daily_inventory_external": output / "daily_inventory_external.csv",
         "simulation_method_external": output / "simulation_method_external.json",
+        "simulation_audit_workbook": output / "simulation_audit_external.xlsx",
     }
 
     write_csv(paths["strategy_comparison"], comparison_rows)
@@ -136,6 +143,15 @@ def run_combined_simulation(
         side_by_side_rows=side_by_side_rows,
     )
 
+    write_simulation_audit_workbook(
+        paths["simulation_audit_workbook"],
+        ledgers=operational_ledgers + combined_ledgers,
+        decisions=operational_decisions + combined_decisions,
+        comparison_rows=comparison_rows,
+        config=operational_config,
+        title="CUEBIT Combined — Simulation Audit",
+    )
+
     paths["portfolio_summary"].write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -151,9 +167,8 @@ def run_combined_simulation(
                 "confidence-adjusted downside"
             ),
             "historical_saving_definition": (
-                "supplier-spend difference between strategies; clean like-for-like "
-                "only when equal litres, equal closing inventory and no additional "
-                "lost sales checks pass"
+                "inventory-adjusted economic cost difference: purchase cash spend "
+                "minus ending inventory valued at the last observed quotation by product"
             ),
             "expected_advantage_definition": (
                 "ex-ante candidate objective improvement used for decision selection; "
@@ -168,12 +183,9 @@ def run_combined_simulation(
             "pattern_event_rows": len(events),
             "pattern_summary_rows": len(summaries),
             "comparison_validation": {
-                "same_total_litres_as_is_vs_combined": summary[
-                    "same_total_litres_as_is_vs_combined"
-                ],
-                "same_closing_inventory_as_is_vs_combined": summary[
-                    "same_closing_inventory_as_is_vs_combined"
-                ],
+                "equal_litres_required": False,
+                "equal_closing_inventory_required": False,
+                "ending_inventory_difference_is_valued": True,
                 "no_additional_lost_sales_vs_as_is": summary[
                     "no_additional_lost_sales_vs_as_is"
                 ],
